@@ -757,7 +757,6 @@ struct PortInfo {
 
   /*! Hardware ID (e.g. VID:PID of USB serial devices) or "n/a" if not available. */
   std::string hardware_id;
-
 };
 
 /* Lists the serial ports available on the system

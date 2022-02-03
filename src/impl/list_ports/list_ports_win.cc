@@ -12,7 +12,9 @@
 #include <windows.h>
 #include <setupapi.h>
 #include <initguid.h>
+#include <cfgmgr32.h>   // for MAX_DEVICE_ID_LEN, CM_Get_Parent and CM_Get_Device_ID
 #include <devguid.h>
+#include <devpkey.h>
 #include <cstring>
 
 using serial::PortInfo;
@@ -20,8 +22,8 @@ using std::vector;
 using std::string;
 
 static const DWORD port_name_max_length = 256;
-static const DWORD friendly_name_max_length = 256;
 static const DWORD hardware_id_max_length = 256;
+static const DWORD bus_reported_device_desc_max_length = 256;
 
 // Convert a wide Unicode string to an UTF8 string
 std::string utf8_encode(const std::wstring &wstr)
@@ -37,20 +39,25 @@ serial::list_ports()
 {
 	vector<PortInfo> devices_found;
 
+	SP_DEVINFO_DATA device_info_data;
+	unsigned int device_info_set_index = 0;
+
 	HDEVINFO device_info_set = SetupDiGetClassDevs(
 		(const GUID *) &GUID_DEVCLASS_PORTS,
 		NULL,
 		NULL,
 		DIGCF_PRESENT);
 
-	unsigned int device_info_set_index = 0;
-	SP_DEVINFO_DATA device_info_data;
-
 	device_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
 
 	while(SetupDiEnumDeviceInfo(device_info_set, device_info_set_index, &device_info_data))
 	{
 		device_info_set_index++;
+
+        TCHAR device_instance_id[MAX_DEVICE_ID_LEN]; // Corresponds to "Device instance path" in device manager
+
+        // Get VID, PID and serialnumber
+        CM_Get_Device_ID(device_info_data.DevInst, device_instance_id, MAX_DEVICE_ID_LEN, 0);
 
 		// Get port name
 
@@ -88,58 +95,52 @@ serial::list_ports()
 		if(_tcsstr(port_name, _T("LPT")) != NULL)
 			continue;
 
-		// Get port friendly name
+        // Get bus reported device description (aka iProduct)
 
-		TCHAR friendly_name[friendly_name_max_length];
-		DWORD friendly_name_actual_length = 0;
+        wchar_t bus_reported_device_desc[bus_reported_device_desc_max_length] = {0};
+        DWORD bus_reported_device_desc_actual_len = 0;
+        DEVPROPTYPE property_type;
 
-		BOOL got_friendly_name = SetupDiGetDeviceRegistryProperty(
-					device_info_set,
-					&device_info_data,
-					SPDRP_FRIENDLYNAME,
-					NULL,
-					(PBYTE)friendly_name,
-					friendly_name_max_length,
-					&friendly_name_actual_length);
+		BOOL success = SetupDiGetDevicePropertyW(device_info_set,
+                                                 &device_info_data,
+                                                 &DEVPKEY_Device_BusReportedDeviceDesc,
+                                                 &property_type,
+                                                 (PBYTE)bus_reported_device_desc,
+                                                 bus_reported_device_desc_max_length,
+                                                 &bus_reported_device_desc_actual_len,
+                                                 0);
 
-		if(got_friendly_name == TRUE && friendly_name_actual_length > 0)
-			friendly_name[friendly_name_actual_length-1] = '\0';
-		else
-			friendly_name[0] = '\0';
+        if (success && bus_reported_device_desc_actual_len > 0) {
+            bus_reported_device_desc[bus_reported_device_desc_actual_len-1] = '\0';
+        }
+        else {
+            bus_reported_device_desc[0] = '\0';
+        }
 
-		// Get hardware ID
-
-		TCHAR hardware_id[hardware_id_max_length];
-		DWORD hardware_id_actual_length = 0;
-
-		BOOL got_hardware_id = SetupDiGetDeviceRegistryProperty(
-					device_info_set,
-					&device_info_data,
-					SPDRP_HARDWAREID,
-					NULL,
-					(PBYTE)hardware_id,
-					hardware_id_max_length,
-					&hardware_id_actual_length);
-
-		if(got_hardware_id == TRUE && hardware_id_actual_length > 0)
-			hardware_id[hardware_id_actual_length-1] = '\0';
-		else
-			hardware_id[0] = '\0';
+        // convert wchar_t to std::string
+        std::wstring ws(bus_reported_device_desc);
+        std::string busReportedDeviceDesc( ws.begin(), ws.end() );
 
 		#ifdef UNICODE
 			std::string portName = utf8_encode(port_name);
-			std::string friendlyName = utf8_encode(friendly_name);
-			std::string hardwareId = utf8_encode(hardware_id);
+            std::string deviceInstanceId = utf8_encode(device_instance_id);
 		#else
 			std::string portName = port_name;
-			std::string friendlyName = friendly_name;
-			std::string hardwareId = hardware_id;
+            std::string deviceInstanceId = device_instance_id;
 		#endif
+
+        // find serialnumber (comes after pid substring) and prefix with "SNR="
+        // to make parsing of serialnumber similar to how it's done on linux/macos
+        std::string pid = "PID_0678\\";
+        std::size_t index = deviceInstanceId.find(pid);
+        if (index != std::string::npos) {
+            deviceInstanceId.insert(index + pid.length(),"SNR=");
+        }
 
 		PortInfo port_entry;
 		port_entry.port = portName;
-		port_entry.description = friendlyName;
-		port_entry.hardware_id = hardwareId;
+		port_entry.description = busReportedDeviceDesc;
+		port_entry.hardware_id = deviceInstanceId;
 
 		devices_found.push_back(port_entry);
 	}
