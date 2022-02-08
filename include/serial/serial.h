@@ -45,6 +45,12 @@
 #include <stdexcept>
 #include <serial/v8stdint.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+// #include <minwindef.h>
+#include <usbspec.h>
+#endif // #if defined(_WIN32)
+
 #define THROW(exceptionClass, message) throw exceptionClass(__FILE__, \
 __LINE__, (message) )
 
@@ -758,9 +764,9 @@ struct PortInfo {
   /*! Hardware ID (e.g. VID:PID of USB serial devices) or "n/a" if not available. */
   std::string hardware_id;
 
-  std::string test_desc;
-
-  wchar_t szBuffer[4096];
+  std::string iManufacturer;
+  std::string iProduct;
+  std::string iSerialNumber;
 
 };
 
